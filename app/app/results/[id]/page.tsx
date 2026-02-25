@@ -420,7 +420,7 @@ export default function ResultsPage() {
                 onToggle={() => toggleSection('bottlenecks')}
               >
                 <div className="space-y-4">
-                  {data.advisory.top_bottlenecks.map((b, i) => (
+                  {(data.advisory.top_bottlenecks ?? []).map((b, i) => (
                     <div key={i} className="flex gap-3">
                       <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gray-100 text-xs font-bold text-gray-600">
                         {i + 1}
@@ -446,9 +446,9 @@ export default function ResultsPage() {
                 onToggle={() => toggleSection('roadmap')}
               >
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <RoadmapPhase label="Days 0–30" color="bg-gray-900" items={data.advisory.roadmap.days_0_30} />
-                  <RoadmapPhase label="Days 31–60" color="bg-blue-700" items={data.advisory.roadmap.days_31_60} />
-                  <RoadmapPhase label="Days 61–90" color="bg-emerald-700" items={data.advisory.roadmap.days_61_90} />
+                  <RoadmapPhase label="Days 0–30" color="bg-gray-900" items={data.advisory.roadmap?.days_0_30 ?? []} />
+                  <RoadmapPhase label="Days 31–60" color="bg-blue-700" items={data.advisory.roadmap?.days_31_60 ?? []} />
+                  <RoadmapPhase label="Days 61–90" color="bg-emerald-700" items={data.advisory.roadmap?.days_61_90 ?? []} />
                 </div>
               </AdvisorySection>
 
@@ -460,7 +460,7 @@ export default function ResultsPage() {
                 onToggle={() => toggleSection('useCases')}
               >
                 <div className="space-y-3">
-                  {data.advisory.prioritized_use_cases.map((uc, i) => (
+                  {(data.advisory.prioritized_use_cases ?? []).map((uc, i) => (
                     <div key={i} className="rounded-md border bg-white p-4">
                       <div className="flex items-start justify-between gap-4 mb-2">
                         <p className="text-sm font-semibold">{uc.title}</p>
@@ -482,7 +482,7 @@ export default function ResultsPage() {
                             Partner required
                           </span>
                         )}
-                        {uc.dependencies.map((dep, j) => (
+                        {(uc.dependencies ?? []).map((dep, j) => (
                           <span key={j} className="rounded-full bg-gray-100 px-2.5 py-0.5 text-[10px] text-gray-500">
                             Req: {dep}
                           </span>
@@ -501,7 +501,7 @@ export default function ResultsPage() {
                 onToggle={() => toggleSection('governance')}
               >
                 <div className="space-y-3">
-                  {data.advisory.governance_notes.map((g, i) => (
+                  {(data.advisory.governance_notes ?? []).map((g, i) => (
                     <div key={i} className="flex gap-3">
                       <UrgencyBadge urgency={g.urgency} />
                       <div>
@@ -514,7 +514,7 @@ export default function ResultsPage() {
               </AdvisorySection>
 
               {/* Partner Gaps */}
-              {data.advisory.partner_gaps.length > 0 && (
+              {(data.advisory.partner_gaps ?? []).length > 0 && (
                 <AdvisorySection
                   title="Capability Gaps"
                   subtitle="Areas requiring specialized external partners"
@@ -522,7 +522,7 @@ export default function ResultsPage() {
                   onToggle={() => toggleSection('partners')}
                 >
                   <div className="space-y-3">
-                    {data.advisory.partner_gaps.map((p, i) => (
+                    {(data.advisory.partner_gaps ?? []).map((p, i) => (
                       <div key={i} className="rounded-md border bg-white p-4">
                         <p className="text-sm font-semibold mb-1">{p.capability}</p>
                         <p className="text-xs text-muted-foreground mb-2">{p.reason}</p>
@@ -534,7 +534,7 @@ export default function ResultsPage() {
               )}
 
               {/* Nividous Fit */}
-              {data.advisory.nividous_fit.length > 0 && (
+              {(data.advisory.nividous_fit ?? []).length > 0 && (
                 <AdvisorySection
                   title="Where Nividous Can Help"
                   subtitle="Areas aligned to Nividous process orchestration and AI integration expertise"
@@ -542,7 +542,7 @@ export default function ResultsPage() {
                   onToggle={() => toggleSection('nividous')}
                 >
                   <div className="space-y-3">
-                    {data.advisory.nividous_fit.map((n, i) => (
+                    {(data.advisory.nividous_fit ?? []).map((n, i) => (
                       <div key={i} className="flex gap-3">
                         <div className="h-5 w-5 shrink-0 rounded-full bg-gray-900 mt-0.5" />
                         <div>
