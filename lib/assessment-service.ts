@@ -72,6 +72,15 @@ export async function saveAssessment(
   }
 }
 
+export async function deleteAssessment(assessmentId: string) {
+  const { error } = await supabase
+    .from('assessments')
+    .delete()
+    .eq('id', assessmentId)
+
+  if (error) throw error
+}
+
 export async function getAssessmentHistory(userId: string) {
   const { data, error } = await supabase
     .from('assessments')

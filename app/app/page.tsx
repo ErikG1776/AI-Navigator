@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { signOutUser } from '@/lib/auth'
 import { useAuth } from '@/lib/auth-context'
-import { getAssessmentHistory } from '@/lib/assessment-service'
+import { getAssessmentHistory, deleteAssessment } from '@/lib/assessment-service'
 
 type AssessmentSummary = {
   id: string
@@ -44,6 +44,7 @@ export default function DashboardPage() {
   const { user, isLoading } = useAuth()
   const [assessments, setAssessments] = useState<AssessmentSummary[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -62,6 +63,21 @@ export default function DashboardPage() {
   const handleSignOut = async () => {
     await signOutUser()
     router.replace('/auth/login')
+  }
+
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!confirm('Delete this assessment? This cannot be undone.')) return
+    setDeletingId(id)
+    try {
+      await deleteAssessment(id)
+      setAssessments((prev) => prev.filter((a) => a.id !== id))
+    } catch {
+      alert('Failed to delete assessment. Please try again.')
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   if (isLoading) {
@@ -129,36 +145,46 @@ export default function DashboardPage() {
           ) : (
             <div className="space-y-2">
               {assessments.map((a) => (
-                <Link key={a.id} href={`/app/results/${a.id}`} className="block">
-                  <Card className="hover:border-gray-400 transition-colors cursor-pointer">
-                    <CardContent className="py-4 px-5">
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">
-                            {a.title ?? 'AI Readiness Assessment'}
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {formatDate(a.created_at)}
-                          </p>
+                <div key={a.id} className="relative group">
+                  <Link href={`/app/results/${a.id}`} className="block">
+                    <Card className="hover:border-gray-400 transition-colors cursor-pointer">
+                      <CardContent className="py-4 px-5">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">
+                              {a.title ?? 'AI Readiness Assessment'}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {formatDate(a.created_at)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-4 shrink-0">
+                            {a.overallscore !== null && (
+                              <div className="text-right">
+                                <p className="text-lg font-bold tabular-nums">{a.overallscore.toFixed(1)}</p>
+                                <p className="text-[10px] text-muted-foreground">Overall</p>
+                              </div>
+                            )}
+                            {a.overallstage && (
+                              <Badge variant={STAGE_VARIANTS[a.overallstage] ?? 'default'}>
+                                {a.overallstage}
+                              </Badge>
+                            )}
+                            <span className="text-muted-foreground text-sm">→</span>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-4 shrink-0">
-                          {a.overallscore !== null && (
-                            <div className="text-right">
-                              <p className="text-lg font-bold tabular-nums">{a.overallscore.toFixed(1)}</p>
-                              <p className="text-[10px] text-muted-foreground">Overall</p>
-                            </div>
-                          )}
-                          {a.overallstage && (
-                            <Badge variant={STAGE_VARIANTS[a.overallstage] ?? 'default'}>
-                              {a.overallstage}
-                            </Badge>
-                          )}
-                          <span className="text-muted-foreground text-sm">→</span>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </Link>
+                      </CardContent>
+                    </Card>
+                  </Link>
+                  <button
+                    onClick={(e) => handleDelete(e, a.id)}
+                    disabled={deletingId === a.id}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity rounded p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50"
+                    title="Delete assessment"
+                  >
+                    {deletingId === a.id ? '…' : '✕'}
+                  </button>
+                </div>
               ))}
             </div>
           )}
