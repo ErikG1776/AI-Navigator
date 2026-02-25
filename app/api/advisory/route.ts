@@ -206,6 +206,8 @@ ADVISORY REQUIREMENTS
 Generate the advisory now using the generate_advisory tool.`
 }
 
+export const maxDuration = 60
+
 export async function POST(request: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
@@ -279,20 +281,27 @@ export async function POST(request: NextRequest) {
 
   const anthropic = new Anthropic({ apiKey })
 
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 4096,
-    tools: [ADVISORY_TOOL_SCHEMA],
-    tool_choice: { type: 'tool', name: 'generate_advisory' },
-    messages: [{ role: 'user', content: buildAdvisoryPrompt(promptParams) }],
-  })
+  let advisory: AdvisoryOutput
+  try {
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
+      tools: [ADVISORY_TOOL_SCHEMA],
+      tool_choice: { type: 'tool', name: 'generate_advisory' },
+      messages: [{ role: 'user', content: buildAdvisoryPrompt(promptParams) }],
+    })
 
-  const toolUseBlock = message.content.find((b) => b.type === 'tool_use')
-  if (!toolUseBlock || toolUseBlock.type !== 'tool_use') {
-    return NextResponse.json({ error: 'Advisory generation failed' }, { status: 500 })
+    const toolUseBlock = message.content.find((b) => b.type === 'tool_use')
+    if (!toolUseBlock || toolUseBlock.type !== 'tool_use') {
+      return NextResponse.json({ error: 'Advisory generation failed' }, { status: 500 })
+    }
+
+    advisory = toolUseBlock.input as AdvisoryOutput
+  } catch (err) {
+    console.error('Anthropic API error:', err)
+    const message = err instanceof Error ? err.message : 'Advisory generation failed'
+    return NextResponse.json({ error: message }, { status: 502 })
   }
-
-  const advisory = toolUseBlock.input as AdvisoryOutput
 
   const { error: updateError } = await supabase
     .from('assessments')

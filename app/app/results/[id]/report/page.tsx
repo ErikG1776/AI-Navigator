@@ -267,7 +267,7 @@ export default function ReportPage() {
         </div>
       </div>
 
-      <style jsx global>{`
+      <style>{`
         @media print {
           @page { margin: 1.5cm; }
           body { font-size: 11px; }
