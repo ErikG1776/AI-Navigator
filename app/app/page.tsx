@@ -145,46 +145,44 @@ export default function DashboardPage() {
           ) : (
             <div className="space-y-2">
               {assessments.map((a) => (
-                <div key={a.id} className="relative group">
-                  <Link href={`/app/results/${a.id}`} className="block">
-                    <Card className="hover:border-gray-400 transition-colors cursor-pointer">
-                      <CardContent className="py-4 px-5">
-                        <div className="flex items-center justify-between gap-4">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium truncate">
-                              {a.title ?? 'AI Readiness Assessment'}
-                            </p>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              {formatDate(a.created_at)}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-4 shrink-0">
-                            {a.overallscore !== null && (
-                              <div className="text-right">
-                                <p className="text-lg font-bold tabular-nums">{a.overallscore.toFixed(1)}</p>
-                                <p className="text-[10px] text-muted-foreground">Overall</p>
-                              </div>
-                            )}
-                            {a.overallstage && (
-                              <Badge variant={STAGE_VARIANTS[a.overallstage] ?? 'default'}>
-                                {a.overallstage}
-                              </Badge>
-                            )}
-                            <span className="text-muted-foreground text-sm">→</span>
-                          </div>
+                <Card key={a.id} className="hover:border-gray-400 transition-colors">
+                  <CardContent className="py-4 px-5">
+                    <div className="flex items-center gap-4">
+                      <Link href={`/app/results/${a.id}`} className="flex-1 min-w-0 flex items-center gap-4">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">
+                            {a.title ?? 'AI Readiness Assessment'}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {formatDate(a.created_at)}
+                          </p>
                         </div>
-                      </CardContent>
-                    </Card>
-                  </Link>
-                  <button
-                    onClick={(e) => handleDelete(e, a.id)}
-                    disabled={deletingId === a.id}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity rounded p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50"
-                    title="Delete assessment"
-                  >
-                    {deletingId === a.id ? '…' : '✕'}
-                  </button>
-                </div>
+                        <div className="flex items-center gap-4 shrink-0">
+                          {a.overallscore !== null && (
+                            <div className="text-right">
+                              <p className="text-lg font-bold tabular-nums">{a.overallscore.toFixed(1)}</p>
+                              <p className="text-[10px] text-muted-foreground">Overall</p>
+                            </div>
+                          )}
+                          {a.overallstage && (
+                            <Badge variant={STAGE_VARIANTS[a.overallstage] ?? 'default'}>
+                              {a.overallstage}
+                            </Badge>
+                          )}
+                          <span className="text-muted-foreground text-sm">→</span>
+                        </div>
+                      </Link>
+                      <button
+                        onClick={(e) => handleDelete(e, a.id)}
+                        disabled={deletingId === a.id}
+                        className="shrink-0 rounded p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors"
+                        title="Delete assessment"
+                      >
+                        {deletingId === a.id ? '…' : '✕'}
+                      </button>
+                    </div>
+                  </CardContent>
+                </Card>
               ))}
             </div>
           )}
