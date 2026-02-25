@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { calculateScores } from '@/lib/scoring'
+import type { CompanyContext } from '@/lib/advisory-types'
 
 type AssessmentResponse = {
   [questionKey: string]: number
@@ -7,13 +8,18 @@ type AssessmentResponse = {
 
 export async function saveAssessment(
   userId: string,
-  responses: AssessmentResponse
+  responses: AssessmentResponse,
+  companyContext?: CompanyContext
 ) {
+  const industry = companyContext?.industry ?? 'Unknown'
+  const title = `AI Readiness Assessment — ${industry}`
+
   const { data: assessment, error: assessmentError } = await supabase
     .from('assessments')
     .insert({
       user_id: userId,
-      title: 'AI Navigator Assessment',
+      title,
+      company_context: companyContext ?? null,
     })
     .select('id')
     .single()
@@ -52,6 +58,7 @@ export async function saveAssessment(
       aaimmstage: scores.aaImmStage,
       navigatorstage: scores.navigatorStage,
       overallstage: scores.overallStage,
+      dimension_scores: scores.dimensionScores,
     })
     .eq('id', assessmentId)
 
@@ -63,4 +70,17 @@ export async function saveAssessment(
     assessmentId,
     scores,
   }
+}
+
+export async function getAssessmentHistory(userId: string) {
+  const { data, error } = await supabase
+    .from('assessments')
+    .select(
+      'id, title, created_at, overallscore, overallstage, aaimmscore, aaimmstage, navigatorscore, navigatorstage'
+    )
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+  return data ?? []
 }
