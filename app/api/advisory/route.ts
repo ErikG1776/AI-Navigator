@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
+import * as Sentry from '@sentry/nextjs'
 import type { AdvisoryOutput } from '@/lib/advisory-types'
+import { checkRateLimit } from '@/lib/rate-limit'
 
 const ADVISORY_TOOL_SCHEMA = {
   name: 'generate_advisory',
@@ -220,16 +222,26 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Database not configured' }, { status: 503 })
   }
 
-  let body: { assessment_id: string; user_id: string }
+  let body: { assessment_id: string; user_id: string; force?: boolean }
   try {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 
-  const { assessment_id, user_id } = body
+  const { assessment_id, user_id, force } = body
   if (!assessment_id || !user_id) {
     return NextResponse.json({ error: 'assessment_id and user_id are required' }, { status: 400 })
+  }
+
+  // 10 advisory generations per user per hour
+  const rateLimit = checkRateLimit(`advisory:${user_id}`, 10, 60 * 60 * 1000)
+  if (!rateLimit.allowed) {
+    const retryAfterSec = Math.ceil((rateLimit.resetAt! - Date.now()) / 1000)
+    return NextResponse.json(
+      { error: 'Rate limit exceeded. You can generate up to 10 advisories per hour.' },
+      { status: 429, headers: { 'Retry-After': String(retryAfterSec) } }
+    )
   }
 
   // Use service client with anon key (RLS will enforce ownership via JWT)
@@ -244,7 +256,7 @@ export async function POST(request: NextRequest) {
   const { data: assessment, error: fetchError } = await supabase
     .from('assessments')
     .select(
-      'id, overallscore, overallstage, aaimmscore, aaimmstage, navigatorscore, navigatorstage, dimension_scores, company_context'
+      'id, overallscore, overallstage, aaimmscore, aaimmstage, navigatorscore, navigatorstage, dimension_scores, company_context, advisory'
     )
     .eq('id', assessment_id)
     .eq('user_id', user_id)
@@ -252,6 +264,11 @@ export async function POST(request: NextRequest) {
 
   if (fetchError || !assessment) {
     return NextResponse.json({ error: 'Assessment not found' }, { status: 404 })
+  }
+
+  // Return cached advisory unless caller explicitly requests regeneration
+  if (assessment.advisory && !force) {
+    return NextResponse.json({ advisory: assessment.advisory })
   }
 
   const context = assessment.company_context as {
@@ -298,6 +315,7 @@ export async function POST(request: NextRequest) {
 
     advisory = toolUseBlock.input as AdvisoryOutput
   } catch (err) {
+    Sentry.captureException(err, { tags: { component: 'advisory-route' }, extra: { assessment_id, user_id } })
     console.error('Anthropic API error:', err)
     const message = err instanceof Error ? err.message : 'Advisory generation failed'
     return NextResponse.json({ error: message }, { status: 502 })
@@ -310,6 +328,7 @@ export async function POST(request: NextRequest) {
     .eq('user_id', user_id)
 
   if (updateError) {
+    Sentry.captureException(updateError, { tags: { component: 'advisory-route', step: 'persist' }, extra: { assessment_id } })
     console.error('Failed to persist advisory:', updateError)
   }
 

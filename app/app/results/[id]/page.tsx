@@ -128,7 +128,7 @@ export default function ResultsPage() {
     fetchAssessment()
   }, [fetchAssessment])
 
-  const handleGenerateAdvisory = async () => {
+  const handleGenerateAdvisory = async (force = false) => {
     if (!user || !data) return
     setAdvisoryLoading(true)
     setAdvisoryError(null)
@@ -146,6 +146,7 @@ export default function ResultsPage() {
         body: JSON.stringify({
           assessment_id: assessmentId,
           user_id: user.id,
+          force,
         }),
       })
 
@@ -302,7 +303,7 @@ export default function ResultsPage() {
                     strokeWidth={2}
                   />
                   <Tooltip
-                    formatter={(val: number) => [val.toFixed(1), 'Score']}
+                    formatter={(val: number | undefined) => [(val ?? 0).toFixed(1), 'Score']}
                     contentStyle={{ fontSize: 12 }}
                   />
                 </RadarChart>
@@ -378,11 +379,11 @@ export default function ResultsPage() {
               </p>
             </div>
             {!data.advisory ? (
-              <Button onClick={handleGenerateAdvisory} disabled={advisoryLoading}>
+              <Button onClick={() => handleGenerateAdvisory(false)} disabled={advisoryLoading}>
                 {advisoryLoading ? 'Generating...' : 'Generate Advisory'}
               </Button>
             ) : (
-              <Button variant="outline" onClick={handleGenerateAdvisory} disabled={advisoryLoading} size="sm">
+              <Button variant="outline" onClick={() => handleGenerateAdvisory(true)} disabled={advisoryLoading} size="sm">
                 {advisoryLoading ? 'Refreshing...' : 'Refresh Advisory'}
               </Button>
             )}
