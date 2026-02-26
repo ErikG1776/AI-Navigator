@@ -145,7 +145,7 @@ export default function DashboardPage() {
           ) : (
             <div className="space-y-2">
               {assessments.map((a) => (
-                <Card key={a.id} className="hover:border-gray-400 transition-colors">
+                <Card key={a.id} className="group hover:border-gray-400 transition-colors">
                   <CardContent className="py-4 px-5">
                     <div className="flex items-center gap-4">
                       <Link href={`/app/results/${a.id}`} className="flex-1 min-w-0 flex items-center gap-4">
@@ -175,7 +175,7 @@ export default function DashboardPage() {
                       <button
                         onClick={(e) => handleDelete(e, a.id)}
                         disabled={deletingId === a.id}
-                        className="shrink-0 rounded p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors"
+                        className="shrink-0 rounded p-1.5 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50 transition-all"
                         title="Delete assessment"
                       >
                         {deletingId === a.id ? '…' : '✕'}
