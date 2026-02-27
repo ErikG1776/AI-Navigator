@@ -208,7 +208,12 @@ ADVISORY REQUIREMENTS
 Generate the advisory now using the generate_advisory tool.`
 }
 
-export const maxDuration = 60
+export const maxDuration = 90
+
+// SSE event encoder
+function encodeEvent(data: object): Uint8Array {
+  return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`)
+}
 
 export async function POST(request: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -235,7 +240,7 @@ export async function POST(request: NextRequest) {
   }
 
   // 10 advisory generations per user per hour
-  const rateLimit = checkRateLimit(`advisory:${user_id}`, 10, 60 * 60 * 1000)
+  const rateLimit = await checkRateLimit(`advisory:${user_id}`, 10, 60 * 60 * 1000)
   if (!rateLimit.allowed) {
     const retryAfterSec = Math.ceil((rateLimit.resetAt! - Date.now()) / 1000)
     return NextResponse.json(
@@ -244,7 +249,6 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Use service client with anon key (RLS will enforce ownership via JWT)
   const supabase = createClient(supabaseUrl, supabaseKey, {
     global: {
       headers: {
@@ -266,11 +270,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Assessment not found' }, { status: 404 })
   }
 
-  // Return cached advisory unless caller explicitly requests regeneration
+  // Fast path: cached advisory returns immediately as JSON
   if (assessment.advisory && !force) {
     return NextResponse.json({ advisory: assessment.advisory })
   }
 
+  // Build prompt params before entering the stream
   const context = assessment.company_context as {
     industry?: string
     company_size?: string
@@ -298,39 +303,87 @@ export async function POST(request: NextRequest) {
 
   const anthropic = new Anthropic({ apiKey })
 
-  let advisory: AdvisoryOutput
-  try {
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
-      tools: [ADVISORY_TOOL_SCHEMA],
-      tool_choice: { type: 'tool', name: 'generate_advisory' },
-      messages: [{ role: 'user', content: buildAdvisoryPrompt(promptParams) }],
-    })
+  // Slow path: stream SSE events while Claude generates the advisory
+  const readableStream = new ReadableStream({
+    async start(controller) {
+      const emit = (data: object) => {
+        try {
+          controller.enqueue(encodeEvent(data))
+        } catch {
+          // controller already closed — ignore
+        }
+      }
 
-    const toolUseBlock = message.content.find((b) => b.type === 'tool_use')
-    if (!toolUseBlock || toolUseBlock.type !== 'tool_use') {
-      return NextResponse.json({ error: 'Advisory generation failed' }, { status: 500 })
-    }
+      // Progress messages emitted while waiting for Claude
+      const PROGRESS_STEPS: [number, string][] = [
+        [0,     'Analyzing your AI maturity profile...'],
+        [8000,  'Identifying critical bottlenecks...'],
+        [18000, 'Building your 90-day roadmap...'],
+        [28000, 'Prioritizing AI use cases for your industry...'],
+        [40000, 'Finalizing governance recommendations...'],
+        [55000, 'Completing advisory synthesis...'],
+      ]
 
-    advisory = toolUseBlock.input as AdvisoryOutput
-  } catch (err) {
-    Sentry.captureException(err, { tags: { component: 'advisory-route' }, extra: { assessment_id, user_id } })
-    console.error('Anthropic API error:', err)
-    const message = err instanceof Error ? err.message : 'Advisory generation failed'
-    return NextResponse.json({ error: message }, { status: 502 })
-  }
+      const timers = PROGRESS_STEPS.map(([delay, message]) =>
+        setTimeout(() => emit({ type: 'progress', message }), delay)
+      )
+      const clearTimers = () => timers.forEach(clearTimeout)
 
-  const { error: updateError } = await supabase
-    .from('assessments')
-    .update({ advisory })
-    .eq('id', assessment_id)
-    .eq('user_id', user_id)
+      try {
+        const message = await anthropic.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 4096,
+          tools: [ADVISORY_TOOL_SCHEMA],
+          tool_choice: { type: 'tool', name: 'generate_advisory' },
+          messages: [{ role: 'user', content: buildAdvisoryPrompt(promptParams) }],
+        })
 
-  if (updateError) {
-    Sentry.captureException(updateError, { tags: { component: 'advisory-route', step: 'persist' }, extra: { assessment_id } })
-    console.error('Failed to persist advisory:', updateError)
-  }
+        clearTimers()
 
-  return NextResponse.json({ advisory })
+        const toolUseBlock = message.content.find((b) => b.type === 'tool_use')
+        if (!toolUseBlock || toolUseBlock.type !== 'tool_use') {
+          emit({ type: 'error', error: 'Advisory generation failed — no structured output received' })
+          controller.close()
+          return
+        }
+
+        const advisory = toolUseBlock.input as AdvisoryOutput
+
+        const { error: updateError } = await supabase
+          .from('assessments')
+          .update({ advisory })
+          .eq('id', assessment_id)
+          .eq('user_id', user_id)
+
+        if (updateError) {
+          Sentry.captureException(updateError, {
+            tags: { component: 'advisory-route', step: 'persist' },
+            extra: { assessment_id },
+          })
+          console.error('Failed to persist advisory:', updateError)
+        }
+
+        emit({ type: 'complete', advisory })
+      } catch (err) {
+        clearTimers()
+        Sentry.captureException(err, {
+          tags: { component: 'advisory-route' },
+          extra: { assessment_id, user_id },
+        })
+        console.error('Anthropic API error:', err)
+        emit({ type: 'error', error: err instanceof Error ? err.message : 'Advisory generation failed' })
+      }
+
+      controller.close()
+    },
+  })
+
+  return new Response(readableStream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  })
 }
