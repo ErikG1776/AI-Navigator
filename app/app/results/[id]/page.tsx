@@ -89,6 +89,7 @@ export default function ResultsPage() {
   const [loading, setLoading] = useState(true)
   const [advisoryLoading, setAdvisoryLoading] = useState(false)
   const [advisoryError, setAdvisoryError] = useState<string | null>(null)
+  const [progressMessage, setProgressMessage] = useState<string | null>(null)
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     bottlenecks: true,
     roadmap: false,
@@ -128,10 +129,11 @@ export default function ResultsPage() {
     fetchAssessment()
   }, [fetchAssessment])
 
-  const handleGenerateAdvisory = async () => {
+  const handleGenerateAdvisory = async (force = false) => {
     if (!user || !data) return
     setAdvisoryLoading(true)
     setAdvisoryError(null)
+    setProgressMessage('Connecting to advisory engine...')
 
     try {
       const session = await supabase.auth.getSession()
@@ -146,6 +148,7 @@ export default function ResultsPage() {
         body: JSON.stringify({
           assessment_id: assessmentId,
           user_id: user.id,
+          force,
         }),
       })
 
@@ -154,13 +157,56 @@ export default function ResultsPage() {
         throw new Error(errData.error ?? 'Advisory generation failed')
       }
 
-      const { advisory } = await res.json()
-      setData((prev) => (prev ? { ...prev, advisory } : prev))
-      setExpandedSections({ bottlenecks: true, roadmap: true, useCases: true, governance: true, partners: true, nividous: true })
+      const contentType = res.headers.get('Content-Type') ?? ''
+
+      if (contentType.includes('text/event-stream')) {
+        // Stream SSE events from the advisory generation
+        const reader = res.body!.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+
+          // Process complete SSE events (delimited by \n\n)
+          let idx: number
+          while ((idx = buffer.indexOf('\n\n')) !== -1) {
+            const chunk = buffer.slice(0, idx)
+            buffer = buffer.slice(idx + 2)
+
+            for (const line of chunk.split('\n')) {
+              if (!line.startsWith('data: ')) continue
+              try {
+                const event = JSON.parse(line.slice(6))
+                if (event.type === 'progress') {
+                  setProgressMessage(event.message)
+                } else if (event.type === 'complete') {
+                  setData((prev) => (prev ? { ...prev, advisory: event.advisory } : prev))
+                  setExpandedSections({ bottlenecks: true, roadmap: true, useCases: true, governance: true, partners: true, nividous: true })
+                } else if (event.type === 'error') {
+                  throw new Error(event.error)
+                }
+              } catch (parseErr) {
+                if (parseErr instanceof SyntaxError) continue
+                throw parseErr
+              }
+            }
+          }
+        }
+      } else {
+        // Cached advisory returned immediately as JSON
+        const { advisory } = await res.json()
+        setData((prev) => (prev ? { ...prev, advisory } : prev))
+        setExpandedSections({ bottlenecks: true, roadmap: true, useCases: true, governance: true, partners: true, nividous: true })
+      }
     } catch (err) {
       setAdvisoryError(err instanceof Error ? err.message : 'Failed to generate advisory')
     } finally {
       setAdvisoryLoading(false)
+      setProgressMessage(null)
     }
   }
 
@@ -302,10 +348,7 @@ export default function ResultsPage() {
                     strokeWidth={2}
                   />
                   <Tooltip
-                    formatter={(val) => {
-                      const num = typeof val === 'number' ? val : Number(val ?? 0)
-                      return [num.toFixed(1), 'Score']
-                    }}
+                    formatter={(val: number | undefined) => [(val ?? 0).toFixed(1), 'Score']}
                     contentStyle={{ fontSize: 12 }}
                   />
                 </RadarChart>
@@ -381,11 +424,11 @@ export default function ResultsPage() {
               </p>
             </div>
             {!data.advisory ? (
-              <Button onClick={handleGenerateAdvisory} disabled={advisoryLoading}>
+              <Button onClick={() => handleGenerateAdvisory(false)} disabled={advisoryLoading}>
                 {advisoryLoading ? 'Generating...' : 'Generate Advisory'}
               </Button>
             ) : (
-              <Button variant="outline" onClick={handleGenerateAdvisory} disabled={advisoryLoading} size="sm">
+              <Button variant="outline" onClick={() => handleGenerateAdvisory(true)} disabled={advisoryLoading} size="sm">
                 {advisoryLoading ? 'Refreshing...' : 'Refresh Advisory'}
               </Button>
             )}
@@ -399,8 +442,14 @@ export default function ResultsPage() {
 
           {advisoryLoading && !data.advisory && (
             <Card>
-              <CardContent className="py-12 text-center text-sm text-muted-foreground">
-                Generating your advisory — this takes 15–30 seconds...
+              <CardContent className="py-12 text-center space-y-3">
+                <div className="flex justify-center">
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-200 border-t-gray-800" />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {progressMessage ?? 'Initializing...'}
+                </p>
+                <p className="text-xs text-muted-foreground opacity-60">This typically takes 20–40 seconds</p>
               </CardContent>
             </Card>
           )}

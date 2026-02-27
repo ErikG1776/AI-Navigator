@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
+import * as Sentry from '@sentry/nextjs'
 import type { AdvisoryOutput } from '@/lib/advisory-types'
+import { checkRateLimit } from '@/lib/rate-limit'
 import { sendAssessmentReportEmail } from '@/lib/email'
 
 const ADVISORY_TOOL_SCHEMA = {
@@ -207,7 +209,12 @@ ADVISORY REQUIREMENTS
 Generate the advisory now using the generate_advisory tool.`
 }
 
-export const maxDuration = 60
+export const maxDuration = 90
+
+// SSE event encoder
+function encodeEvent(data: object): Uint8Array {
+  return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`)
+}
 
 export async function POST(request: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -222,19 +229,28 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Database not configured' }, { status: 503 })
   }
 
-  let body: { assessment_id: string; user_id: string }
+  let body: { assessment_id: string; user_id: string; force?: boolean }
   try {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 
-  const { assessment_id, user_id } = body
+  const { assessment_id, user_id, force } = body
   if (!assessment_id || !user_id) {
     return NextResponse.json({ error: 'assessment_id and user_id are required' }, { status: 400 })
   }
 
-  // Use service client with anon key (RLS will enforce ownership via JWT)
+  // 10 advisory generations per user per hour
+  const rateLimit = await checkRateLimit(`advisory:${user_id}`, 10, 60 * 60 * 1000)
+  if (!rateLimit.allowed) {
+    const retryAfterSec = Math.ceil((rateLimit.resetAt! - Date.now()) / 1000)
+    return NextResponse.json(
+      { error: 'Rate limit exceeded. You can generate up to 10 advisories per hour.' },
+      { status: 429, headers: { 'Retry-After': String(retryAfterSec) } }
+    )
+  }
+
   const supabase = createClient(supabaseUrl, supabaseKey, {
     global: {
       headers: {
@@ -247,7 +263,7 @@ export async function POST(request: NextRequest) {
   const { data: assessment, error: fetchError } = await supabase
     .from('assessments')
     .select(
-      'id, user_id, overallscore, overallstage, aaimmscore, aaimmstage, navigatorscore, navigatorstage, dimension_scores, company_context'
+      'id, user_id, overallscore, overallstage, aaimmscore, aaimmstage, navigatorscore, navigatorstage, dimension_scores, company_context, advisory'
     )
     .eq('id', assessment_id)
     .eq('user_id', user_id)
@@ -257,6 +273,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Assessment not found' }, { status: 404 })
   }
 
+  // Fast path: cached advisory returns immediately as JSON
+  if (assessment.advisory && !force) {
+    return NextResponse.json({ advisory: assessment.advisory })
+  }
+
+  // Build prompt params before entering the stream
   const context = assessment.company_context as {
     industry?: string
     company_size?: string
@@ -284,68 +306,117 @@ export async function POST(request: NextRequest) {
 
   const anthropic = new Anthropic({ apiKey })
 
-  let advisory: AdvisoryOutput
-  try {
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
-      tools: [ADVISORY_TOOL_SCHEMA],
-      tool_choice: { type: 'tool', name: 'generate_advisory' },
-      messages: [{ role: 'user', content: buildAdvisoryPrompt(promptParams) }],
-    })
+  // Slow path: stream SSE events while Claude generates the advisory
+  const readableStream = new ReadableStream({
+    async start(controller) {
+      const emit = (data: object) => {
+        try {
+          controller.enqueue(encodeEvent(data))
+        } catch {
+          // controller already closed — ignore
+        }
+      }
 
-    const toolUseBlock = message.content.find((b) => b.type === 'tool_use')
-    if (!toolUseBlock || toolUseBlock.type !== 'tool_use') {
-      return NextResponse.json({ error: 'Advisory generation failed' }, { status: 500 })
-    }
+      // Progress messages emitted while waiting for Claude
+      const PROGRESS_STEPS: [number, string][] = [
+        [0,     'Analyzing your AI maturity profile...'],
+        [8000,  'Identifying critical bottlenecks...'],
+        [18000, 'Building your 90-day roadmap...'],
+        [28000, 'Prioritizing AI use cases for your industry...'],
+        [40000, 'Finalizing governance recommendations...'],
+        [55000, 'Completing advisory synthesis...'],
+      ]
 
-    advisory = toolUseBlock.input as AdvisoryOutput
-  } catch (err) {
-    console.error('Anthropic API error:', err)
-    const message = err instanceof Error ? err.message : 'Advisory generation failed'
-    return NextResponse.json({ error: message }, { status: 502 })
-  }
-
-  const { error: updateError } = await supabase
-    .from('assessments')
-    .update({ advisory })
-    .eq('id', assessment_id)
-    .eq('user_id', user_id)
-
-  if (updateError) {
-    console.error('Failed to persist advisory:', updateError)
-  } else {
-    try {
-      const { data: userRecord, error: userFetchError } = await supabaseAdmin.auth.admin.getUserById(
-        assessment.user_id
+      const timers = PROGRESS_STEPS.map(([delay, message]) =>
+        setTimeout(() => emit({ type: 'progress', message }), delay)
       )
+      const clearTimers = () => timers.forEach(clearTimeout)
 
-      if (userFetchError) {
-        throw userFetchError
-      }
-
-      const userEmail = userRecord?.user?.email
-      if (userEmail) {
-        const assessmentId = assessment_id
-        const reportUrl = `${process.env.NEXT_PUBLIC_APP_URL}/app/results/${assessmentId}`
-        const companyName =
-          (assessment.company_context as { companyName?: string } | null)?.companyName
-        const recipientName = userEmail.split('@')[0]
-
-        await sendAssessmentReportEmail({
-          to: userEmail,
-          recipientName,
-          companyName,
-          assessmentId,
-          overallScore: assessment.overallscore ?? 0,
-          overallStage: assessment.overallstage ?? 'Unknown',
-          reportUrl,
+      try {
+        const message = await anthropic.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 4096,
+          tools: [ADVISORY_TOOL_SCHEMA],
+          tool_choice: { type: 'tool', name: 'generate_advisory' },
+          messages: [{ role: 'user', content: buildAdvisoryPrompt(promptParams) }],
         })
-      }
-    } catch (emailError) {
-      console.error('Failed to send assessment report email:', emailError)
-    }
-  }
 
-  return NextResponse.json({ advisory })
+        clearTimers()
+
+        const toolUseBlock = message.content.find((b) => b.type === 'tool_use')
+        if (!toolUseBlock || toolUseBlock.type !== 'tool_use') {
+          emit({ type: 'error', error: 'Advisory generation failed — no structured output received' })
+          controller.close()
+          return
+        }
+
+        const advisory = toolUseBlock.input as AdvisoryOutput
+
+        const { error: updateError } = await supabase
+          .from('assessments')
+          .update({ advisory })
+          .eq('id', assessment_id)
+          .eq('user_id', user_id)
+
+        if (updateError) {
+          Sentry.captureException(updateError, {
+            tags: { component: 'advisory-route', step: 'persist' },
+            extra: { assessment_id },
+          })
+          console.error('Failed to persist advisory:', updateError)
+        } else {
+          // Send report email after successful persist
+          try {
+            const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+            if (serviceRoleKey && supabaseUrl) {
+              const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
+              const { data: userRecord, error: userFetchError } =
+                await supabaseAdmin.auth.admin.getUserById(assessment.user_id as string)
+
+              if (!userFetchError) {
+                const userEmail = userRecord?.user?.email
+                if (userEmail) {
+                  const reportUrl = `${process.env.NEXT_PUBLIC_APP_URL}/app/results/${assessment_id}`
+                  const companyName =
+                    (assessment.company_context as { companyName?: string } | null)?.companyName
+                  await sendAssessmentReportEmail({
+                    to: userEmail,
+                    recipientName: userEmail.split('@')[0],
+                    companyName,
+                    assessmentId: assessment_id,
+                    overallScore: assessment.overallscore ?? 0,
+                    overallStage: assessment.overallstage ?? 'Unknown',
+                    reportUrl,
+                  })
+                }
+              }
+            }
+          } catch (emailError) {
+            console.error('Failed to send assessment report email:', emailError)
+          }
+        }
+
+        emit({ type: 'complete', advisory })
+      } catch (err) {
+        clearTimers()
+        Sentry.captureException(err, {
+          tags: { component: 'advisory-route' },
+          extra: { assessment_id, user_id },
+        })
+        console.error('Anthropic API error:', err)
+        emit({ type: 'error', error: err instanceof Error ? err.message : 'Advisory generation failed' })
+      }
+
+      controller.close()
+    },
+  })
+
+  return new Response(readableStream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  })
 }
