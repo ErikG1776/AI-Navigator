@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import * as Sentry from '@sentry/nextjs'
 import type { AdvisoryOutput } from '@/lib/advisory-types'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { sendAssessmentReportEmail } from '@/lib/email'
 
 const ADVISORY_TOOL_SCHEMA = {
   name: 'generate_advisory',
@@ -223,7 +224,8 @@ export async function POST(request: NextRequest) {
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!supabaseUrl || !supabaseKey) {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!supabaseUrl || !supabaseKey || !serviceRoleKey) {
     return NextResponse.json({ error: 'Database not configured' }, { status: 503 })
   }
 
@@ -256,11 +258,12 @@ export async function POST(request: NextRequest) {
       },
     },
   })
+  const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
 
   const { data: assessment, error: fetchError } = await supabase
     .from('assessments')
     .select(
-      'id, overallscore, overallstage, aaimmscore, aaimmstage, navigatorscore, navigatorstage, dimension_scores, company_context, advisory'
+      'id, user_id, overallscore, overallstage, aaimmscore, aaimmstage, navigatorscore, navigatorstage, dimension_scores, company_context, advisory'
     )
     .eq('id', assessment_id)
     .eq('user_id', user_id)
@@ -361,6 +364,36 @@ export async function POST(request: NextRequest) {
             extra: { assessment_id },
           })
           console.error('Failed to persist advisory:', updateError)
+        } else {
+          // Send report email after successful persist
+          try {
+            const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+            if (serviceRoleKey && supabaseUrl) {
+              const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
+              const { data: userRecord, error: userFetchError } =
+                await supabaseAdmin.auth.admin.getUserById(assessment.user_id as string)
+
+              if (!userFetchError) {
+                const userEmail = userRecord?.user?.email
+                if (userEmail) {
+                  const reportUrl = `${process.env.NEXT_PUBLIC_APP_URL}/app/results/${assessment_id}`
+                  const companyName =
+                    (assessment.company_context as { companyName?: string } | null)?.companyName
+                  await sendAssessmentReportEmail({
+                    to: userEmail,
+                    recipientName: userEmail.split('@')[0],
+                    companyName,
+                    assessmentId: assessment_id,
+                    overallScore: assessment.overallscore ?? 0,
+                    overallStage: assessment.overallstage ?? 'Unknown',
+                    reportUrl,
+                  })
+                }
+              }
+            }
+          } catch (emailError) {
+            console.error('Failed to send assessment report email:', emailError)
+          }
         }
 
         emit({ type: 'complete', advisory })
