@@ -367,28 +367,24 @@ export async function POST(request: NextRequest) {
         } else {
           // Send report email after successful persist
           try {
-            const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-            if (serviceRoleKey && supabaseUrl) {
-              const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
-              const { data: userRecord, error: userFetchError } =
-                await supabaseAdmin.auth.admin.getUserById(assessment.user_id as string)
+            const { data: userRecord, error: userFetchError } =
+              await supabaseAdmin.auth.admin.getUserById(assessment.user_id as string)
 
-              if (!userFetchError) {
-                const userEmail = userRecord?.user?.email
-                if (userEmail) {
-                  const reportUrl = `${process.env.NEXT_PUBLIC_APP_URL}/app/results/${assessment_id}`
-                  const companyName =
-                    (assessment.company_context as { companyName?: string } | null)?.companyName
-                  await sendAssessmentReportEmail({
-                    to: userEmail,
-                    recipientName: userEmail.split('@')[0],
-                    companyName,
-                    assessmentId: assessment_id,
-                    overallScore: assessment.overallscore ?? 0,
-                    overallStage: assessment.overallstage ?? 'Unknown',
-                    reportUrl,
-                  })
-                }
+            if (!userFetchError) {
+              const userEmail = userRecord?.user?.email
+              if (userEmail) {
+                const reportUrl = `${process.env.NEXT_PUBLIC_APP_URL}/app/results/${assessment_id}`
+                const companyName =
+                  (assessment.company_context as { companyName?: string } | null)?.companyName
+                await sendAssessmentReportEmail({
+                  to: userEmail,
+                  recipientName: userEmail.split('@')[0],
+                  companyName,
+                  assessmentId: assessment_id,
+                  overallScore: assessment.overallscore ?? 0,
+                  overallStage: assessment.overallstage ?? 'Unknown',
+                  reportUrl,
+                })
               }
             }
           } catch (emailError) {
