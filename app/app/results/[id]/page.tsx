@@ -18,7 +18,7 @@ import { useAuth } from '@/lib/auth-context'
 import { supabase } from '@/lib/supabase'
 import type { AdvisoryOutput, CompanyContext } from '@/lib/advisory-types'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+///─── Types ────────────────────────────────────────────────────────────────────
 
 type AssessmentData = {
   id: string
