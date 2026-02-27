@@ -302,7 +302,10 @@ export default function ResultsPage() {
                     strokeWidth={2}
                   />
                   <Tooltip
-                    formatter={(val: number) => [val.toFixed(1), 'Score']}
+                    formatter={(val) => {
+                      const num = typeof val === 'number' ? val : Number(val ?? 0)
+                      return [num.toFixed(1), 'Score']
+                    }}
                     contentStyle={{ fontSize: 12 }}
                   />
                 </RadarChart>
